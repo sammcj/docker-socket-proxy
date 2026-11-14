@@ -1,4 +1,9 @@
-FROM haproxy:3.4.2-alpine
+# Rolling 3.4 LTS tag, so the weekly rebuild picks up HAProxy and Alpine fixes
+FROM haproxy:3.4-alpine
+
+USER root
+# Alpine publishes fixes ahead of the base image being rebuilt
+RUN apk upgrade --no-cache
 
 EXPOSE 2375
 ENV ALLOW_RESTARTS=0 \
@@ -33,6 +38,5 @@ ENV ALLOW_RESTARTS=0 \
     VOLUMES=0
 COPY docker-entrypoint.sh /usr/local/bin/
 COPY haproxy.cfg /usr/local/etc/haproxy/haproxy.cfg.template
-RUN touch /var/lib/haproxy/server-state
-USER root
+RUN touch /var/lib/haproxy/server-state && chown haproxy:haproxy /var/lib/haproxy/server-state
 CMD ["haproxy", "-f", "/tmp/haproxy.cfg"]

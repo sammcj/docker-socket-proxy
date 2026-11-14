@@ -33,13 +33,13 @@ jobs:
     strategy:
       matrix:
         python:
-          - 3.8
+          - "3.13"
     steps:
       # Prepare environment
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
       # Set up and run tests
       - name: Install python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - name: Generate cache key CACHE
@@ -47,7 +47,7 @@ jobs:
           echo "CACHE=${{ secrets.CACHE_DATE }} ${{ runner.os }} $(python -VV |
           sha256sum | cut -d' ' -f1) ${{ hashFiles('pyproject.toml') }} ${{
           hashFiles('poetry.lock') }}" >> $GITHUB_ENV
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             .cache.~
@@ -73,8 +73,8 @@ jobs:
       PUSH: ${{ toJSON(github.event_name != 'pull_request') }}
     steps:
       # Set up Docker Environment
-      - uses: actions/checkout@v4
-      - uses: actions/cache@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
         with:
           path: |
             /tmp/.buildx-cache
