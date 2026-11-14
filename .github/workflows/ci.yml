@@ -17,152 +17,77 @@ name: Build, Test & Deploy
           https://docs.pytest.org/en/latest/example/simple.html#how-to-change-command-line-options-defaults
         required: false
 
+permissions:
+  contents: read
+
 env:
-  LANG: "en_US.utf-8"
-  LC_ALL: "en_US.utf-8"
-  PIP_CACHE_DIR: ${{ github.workspace }}/.cache.~/pip
-  PIPX_HOME: ${{ github.workspace }}/.cache.~/pipx
-  POETRY_CACHE_DIR: ${{ github.workspace }}/.cache.~/pypoetry
-  POETRY_VIRTUALENVS_IN_PROJECT: "true"
   PYTEST_ADDOPTS: ${{ github.event.inputs.pytest_addopts }}
-  PYTHONIOENCODING: "UTF-8"
 
 jobs:
   build-test:
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        python:
-          - "3.13"
     steps:
-      # Prepare environment
-      - uses: actions/checkout@v7
-      # Set up and run tests
-      - name: Install python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python }}
-      - name: Generate cache key CACHE
-        run:
-          echo "CACHE=${{ secrets.CACHE_DATE }} ${{ runner.os }} $(python -VV |
-          sha256sum | cut -d' ' -f1) ${{ hashFiles('pyproject.toml') }} ${{
-          hashFiles('poetry.lock') }}" >> $GITHUB_ENV
-      - uses: actions/cache@v6
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          path: |
-            .cache.~
-            .venv
-            ~/.local/bin
-          key: venv ${{ env.CACHE }}
+          python-version: "3.13"
       - run: pip install poetry
-      - name: Patch $PATH
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
       - run: poetry install
-      # Run tests
       - run: poetry run pytest --prebuild
+
   build-push:
+    needs: build-test
     runs-on: ubuntu-24.04
-    services:
-      registry:
-        image: registry:2
-        ports:
-          - 5000:5000
+    permissions:
+      contents: read
+      packages: write
     env:
-      DOCKER_IMAGE_NAME: ${{ github.repository }}
-      DOCKERHUB_IMAGE_NAME: tecnativa/docker-socket-proxy
-      PUSH: ${{ toJSON(github.event_name != 'pull_request') }}
+      PUSH: ${{ github.event_name != 'pull_request' }}
     steps:
-      # Set up Docker Environment
-      - uses: actions/checkout@v7
-      - uses: actions/cache@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            /tmp/.buildx-cache
-          key: buildx|${{ secrets.CACHE_DATE }}|${{ runner.os }}
+          persist-credentials: false
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver-opts: network=host
-          install: true
-      # Build and push
-      - name: Docker meta for local images
-        id: docker_meta_local
-        uses: crazy-max/ghaction-docker-meta@v4
-        with:
-          images: localhost:5000/${{ env.DOCKER_IMAGE_NAME }}
-          tag-edge: true
-          tag-semver: |
-            {{version}}
-            {{major}}
-            {{major}}.{{minor}}
-      - name: Build and push to local (test) registry
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: |
-            linux/386
-            linux/amd64
-            linux/arm/v6
-            linux/arm/v7
-            linux/arm/v8
-            linux/arm64
-            linux/ppc64le
-            linux/s390x
-          load: false
-          push: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-          labels: ${{ steps.docker_meta_local.outputs.labels }}
-          tags: ${{ steps.docker_meta_local.outputs.tags }}
-      # Next jobs only happen outside of pull requests and on main branches
-      - name: Login to DockerHub
-        if: ${{ fromJSON(env.PUSH) }}
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_LOGIN }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Login to GitHub Container Registry
         if: ${{ fromJSON(env.PUSH) }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
-          username: ${{ secrets.BOT_LOGIN }}
-          password: ${{ secrets.BOT_TOKEN }}
-      - name: Docker meta for public images
-        if: ${{ fromJSON(env.PUSH) }}
-        id: docker_meta_public
-        uses: crazy-max/ghaction-docker-meta@v4
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker meta
+        id: docker_meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            ghcr.io/${{ env.DOCKER_IMAGE_NAME }}
-            ${{ env.DOCKERHUB_IMAGE_NAME }}
-          tag-edge: true
-          tag-semver: |
-            {{version}}
-            {{major}}
-            {{major}}.{{minor}}
-      - name: Build and push to public registry(s)
-        if: ${{ fromJSON(env.PUSH) }}
-        uses: docker/build-push-action@v4
+          images: ghcr.io/${{ github.repository }}
+          # latest follows the default branch, so the weekly rebuild keeps it patched
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=ref,event=pr
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: ./Dockerfile
           platforms: |
             linux/386
             linux/amd64
             linux/arm/v6
             linux/arm/v7
-            linux/arm/v8
             linux/arm64
             linux/ppc64le
             linux/s390x
-          load: false
-          push: true
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-          labels: ${{ steps.docker_meta_public.outputs.labels }}
-          tags: ${{ steps.docker_meta_public.outputs.tags }}
+          pull: true
+          # No layer cache: a cached apk upgrade layer would defeat the weekly rebuild
+          no-cache: true
+          push: ${{ fromJSON(env.PUSH) }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          tags: ${{ steps.docker_meta.outputs.tags }}
